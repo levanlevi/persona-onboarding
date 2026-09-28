@@ -44,6 +44,7 @@ Connecting Google shows an "unverified app" screen (Advanced → continue). The 
 - **Gmail access token in an encrypted HTTP-only cookie for one hour**, with no refresh token and no stored inbox data.
 - **The Google app is unverified**, with a 100-user cap and a warning screen.
 - **The call is a browser simulation of a phone call** (WebRTC), not PSTN.
+- **Email snippets reach the models as untrusted text.** The inbox insight is built from snippets and then read into the voice call, so a crafted email could try to inject instructions. Fine for a demo. In production I'd isolate or sanitize that content and keep tools that act on it behind confirmation.
 
 ## Next steps
 

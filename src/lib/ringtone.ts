@@ -25,6 +25,14 @@ function burst() {
   }
 }
 
+// Call from a user gesture (tap/keypress) so the context is allowed to play later.
+export function primeAudio() {
+  try {
+    ctx ??= new AudioContext();
+    if (ctx.state === "suspended") void ctx.resume();
+  } catch {}
+}
+
 export function startRingtone() {
   try {
     ctx ??= new AudioContext();

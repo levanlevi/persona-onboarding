@@ -251,6 +251,9 @@ function GoogleCard({ state, onConnect }: { state: OnboardingState; onConnect: (
           <div className="truncate text-[11px] text-neutral-500">
             {connected ? state.gmail!.email : "read-only · disconnect anytime"}
           </div>
+          {!connected && (
+            <div className="text-[11px] text-neutral-500">google will warn you: Advanced → Continue</div>
+          )}
         </div>
         <button
           onClick={onConnect}

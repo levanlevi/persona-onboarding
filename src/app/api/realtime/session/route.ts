@@ -63,7 +63,7 @@ const tools = [
     parameters: {
       type: "object",
       properties: {
-        reason: { type: "string", enum: ["done", "user_busy", "user_prefers_text", "other"] },
+        reason: { type: "string", enum: ["done", "user_busy", "user_prefers_text", "user_wants_to_skip", "other"] },
       },
       required: ["reason"],
     },

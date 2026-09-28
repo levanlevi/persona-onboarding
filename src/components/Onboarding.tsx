@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRealtimeCall } from "@/hooks/useRealtimeCall";
-import { startRingtone, stopRingtone } from "@/lib/ringtone";
+import { primeAudio, startRingtone, stopRingtone } from "@/lib/ringtone";
 import {
   type AgentVoice,
   initialState,
@@ -30,8 +30,7 @@ type CallUi = "none" | "incoming" | "live";
 type GoogleResult = { type: "persona-google"; ok: boolean; email?: string; gmailScope?: boolean; reason?: string };
 
 const INTRO = [
-  "hey! i'm your new personal assistant",
-  "you can text me or call me anytime and i can help with:\n📞 calling places on your behalf\n💻 browsing the web\n🛍️ shopping for you\n✉️ managing your email and calendar\n🚗 finding DoorDash or Uber options",
+  "hey! i'm your new personal assistant. text or call me anytime and i'll handle calls, email, shopping and errands for you",
   "first things first: what do you want to call me?",
 ];
 
@@ -57,6 +56,7 @@ export function Onboarding() {
   const nudgesRef = useRef(0);
   const lastGoogleRef = useRef(0);
   const introRunningRef = useRef(false);
+  const skipRequestedRef = useRef(false);
   const ringRef = useRef<() => void>(() => {});
   const bootedRef = useRef(false);
   const callRef = useRef<ReturnType<typeof useRealtimeCall> | null>(null);
@@ -192,6 +192,8 @@ export function Onboarding() {
       setCallStartedAt(null);
       const transcript = transcriptRef.current;
       transcriptRef.current = [];
+      const skipRequested = skipRequestedRef.current;
+      skipRequestedRef.current = false;
       const durationSec = callStartRef.current ? Math.round((Date.now() - callStartRef.current) / 1000) : 0;
       callStartRef.current = 0;
       push({ id: uid(), role: "system", kind: "call", outcome, durationSec, transcript, at: Date.now() });
@@ -200,7 +202,9 @@ export function Onboarding() {
       void think({
         type: "call_ended",
         outcome,
-        transcript: transcript.map((t) => `${t.who}: ${t.text}`).join("\n"),
+        transcript:
+          transcript.map((t) => `${t.who}: ${t.text}`).join("\n") +
+          (skipRequested ? "\n[the user asked to skip setup on the call: graduate now]" : ""),
       });
     },
     [log, patch, push, setCall, think],
@@ -293,6 +297,7 @@ export function Onboarding() {
           return { connected: false };
         }
         case "end_call":
+          if (args.reason === "user_wants_to_skip") skipRequestedRef.current = true;
           return { ok: true };
         default:
           return { ok: false, error: "unknown tool" };
@@ -373,9 +378,20 @@ export function Onboarding() {
         callRef.current?.sendNotice(`[the user just texted you during the call: "${t}"]`);
         return;
       }
-      if (callUiRef.current === "incoming" && /\b(no|can'?t|busy|later|text)\b/i.test(t)) decline();
+      // "can't talk" while ringing declines; "no wait, i'll pick up" or "text me the link" must not.
+      if (
+        callUiRef.current === "incoming" &&
+        /\b(no|nope|can'?t|busy|later|not now|instead)\b/i.test(t) &&
+        !/\b(pick|answer|wait|hold on|one sec|coming)\b/i.test(t)
+      )
+        decline();
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      debounceRef.current = setTimeout(() => void think({ type: "user_message" }), 900);
+      // Hold replies until the scripted intro has finished, or the two interleave.
+      const flush = () => {
+        if (introRunningRef.current) debounceRef.current = setTimeout(flush, 300);
+        else void think({ type: "user_message" });
+      };
+      debounceRef.current = setTimeout(flush, 900);
     },
     [decline, log, push, think],
   );
@@ -438,6 +454,16 @@ export function Onboarding() {
     if (bootedRef.current) return;
     bootedRef.current = true;
     let saved: { state: OnboardingState; messages: ChatMessage[]; callUi: CallUi } | null = null;
+    const runIntro = async (lines: string[]) => {
+      introRunningRef.current = true;
+      for (const [i, line] of lines.entries()) {
+        setTyping(true);
+        await sleep(i === 0 ? 700 : 1100);
+        setTyping(false);
+        say(line);
+      }
+      introRunningRef.current = false;
+    };
     try {
       saved = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null");
     } catch {}
@@ -448,26 +474,28 @@ export function Onboarding() {
       // Hydrating from localStorage can only happen after mount (no storage during SSR).
       setState(saved.state);
       setMessages(msgsRef.current);
+      // Restart the quiet timer, otherwise the nudge measures from 0 and fires right after reload.
+      lastActivityRef.current = Date.now();
       // Reloaded mid-call: the call is gone, so treat it as dropped and let the text agent pick up.
       if (saved.callUi === "live") {
         log("resumed_after_reload_mid_call");
         onCallEnded("dropped");
+      } else if (saved.callUi === "incoming") {
+        log("resumed_after_reload_while_ringing");
+        onCallEnded("missed");
+      }
+      // Reloaded mid-intro: finish the script so the naming question still gets asked.
+      if (!saved.state.agentName) {
+        const shown = new Set(msgsRef.current.map((m) => (m.kind === "text" ? m.text : "")));
+        const missing = INTRO.filter((line) => !shown.has(line));
+        if (!shown.has(INTRO.at(-1)!)) void runIntro(missing);
       }
     } else {
       lastActivityRef.current = Date.now();
       stateRef.current = initialState(uid());
       setState(stateRef.current);
       log("session_started", { ua: navigator.userAgent });
-      introRunningRef.current = true;
-      (async () => {
-        for (const [i, line] of INTRO.entries()) {
-          setTyping(true);
-          await sleep(i === 0 ? 700 : 1100);
-          setTyping(false);
-          say(line);
-        }
-        introRunningRef.current = false;
-      })();
+      void runIntro(INTRO);
     }
 
     // Returning from the full-page Google redirect (popup was blocked).
@@ -487,6 +515,16 @@ export function Onboarding() {
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // iOS only lets audio start from a user gesture: unlock it early so the ringtone can play later.
+  useEffect(() => {
+    window.addEventListener("pointerdown", primeAudio);
+    window.addEventListener("keydown", primeAudio);
+    return () => {
+      window.removeEventListener("pointerdown", primeAudio);
+      window.removeEventListener("keydown", primeAudio);
+    };
   }, []);
 
   // Persist everything so a reload resumes exactly where the user was.
