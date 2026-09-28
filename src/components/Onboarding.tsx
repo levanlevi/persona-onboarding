@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRealtimeCall } from "@/hooks/useRealtimeCall";
 import { startRingtone, stopRingtone } from "@/lib/ringtone";
 import {
+  type AgentVoice,
   initialState,
   type CallOutcome,
   type CardKind,
@@ -98,6 +99,7 @@ export function Onboarding() {
       const u = r.updates;
       const p: Partial<OnboardingState> = {};
       if (u.agentName) p.agentName = u.agentName;
+      if (u.agentVoice) p.agentVoice = u.agentVoice;
       if (u.userName) p.userName = u.userName;
       if (u.helpNeed) p.helpNeed = u.helpNeed;
       if (typeof u.textOnly === "boolean") p.textOnly = u.textOnly;
@@ -264,7 +266,8 @@ export function Onboarding() {
         }
         case "rename_agent": {
           const v = cleanName(args.name);
-          if (v) patch({ agentName: v });
+          const voice = ["masculine", "feminine", "neutral"].includes(args.voice as string) ? (args.voice as AgentVoice) : undefined;
+          if (v) patch(voice ? { agentName: v, agentVoice: voice } : { agentName: v });
           return { ok: Boolean(v), note: "you now go by this name" };
         }
         case "send_google_link": {

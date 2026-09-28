@@ -2,7 +2,9 @@ import { after, NextResponse } from "next/server";
 import { REALTIME_MODEL } from "@/lib/openai";
 import { voiceInstructions } from "@/lib/prompts";
 import { logEvent } from "@/lib/db";
-import type { OnboardingState } from "@/lib/types";
+import type { AgentVoice, OnboardingState } from "@/lib/types";
+
+const VOICE_IDS: Record<AgentVoice, string> = { masculine: "cedar", feminine: "marin", neutral: "marin" };
 
 const tools = [
   {
@@ -28,10 +30,14 @@ const tools = [
   {
     type: "function",
     name: "rename_agent",
-    description: "The user wants to call you something else.",
+    description:
+      "The user wants to call you something else. Also pass the voice that fits the new name (or the one they asked for); it takes effect from the next call.",
     parameters: {
       type: "object",
-      properties: { name: { type: "string" } },
+      properties: {
+        name: { type: "string" },
+        voice: { type: "string", enum: ["masculine", "feminine", "neutral"] },
+      },
       required: ["name"],
     },
   },
@@ -84,7 +90,7 @@ export async function POST(req: Request) {
             turn_detection: { type: "semantic_vad", eagerness: "high" },
             noise_reduction: { type: "near_field" },
           },
-          output: { voice: "marin" },
+          output: { voice: VOICE_IDS[state.agentVoice ?? "feminine"] ?? "marin" },
         },
         tools,
         tool_choice: "auto",

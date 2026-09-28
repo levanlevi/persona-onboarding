@@ -3,12 +3,13 @@ import type { ChatCompletionMessageParam } from "openai/resources/chat/completio
 import { openai, TEXT_MODEL } from "@/lib/openai";
 import { textSystemPrompt } from "@/lib/prompts";
 import { logEvent } from "@/lib/db";
-import type { ChatMessage, OnboardingState, TextEvent, TextTurnResult } from "@/lib/types";
+import type { AgentVoice, ChatMessage, OnboardingState, TextEvent, TextTurnResult } from "@/lib/types";
 
 export const maxDuration = 30;
 
 const nullableString = { type: ["string", "null"] };
 const nullableBool = { type: ["boolean", "null"] };
+const VOICES: AgentVoice[] = ["masculine", "feminine", "neutral"];
 
 const schema = {
   type: "object",
@@ -19,9 +20,10 @@ const schema = {
     updates: {
       type: "object",
       additionalProperties: false,
-      required: ["agentName", "userName", "helpNeed", "textOnly", "gmailDeclined"],
+      required: ["agentName", "agentVoice", "userName", "helpNeed", "textOnly", "gmailDeclined"],
       properties: {
         agentName: nullableString,
+        agentVoice: { type: ["string", "null"], enum: [...VOICES, null] },
         userName: nullableString,
         helpNeed: nullableString,
         textOnly: nullableBool,
@@ -94,6 +96,7 @@ export async function POST(req: Request) {
       messages: (raw.messages ?? []).map((m) => m.trim()).filter(Boolean).slice(0, 3),
       updates: {
         agentName: clean(raw.updates?.agentName, 40),
+        agentVoice: VOICES.includes(raw.updates?.agentVoice as AgentVoice) ? raw.updates?.agentVoice : undefined,
         userName: clean(raw.updates?.userName, 40),
         helpNeed: clean(raw.updates?.helpNeed, 200),
         textOnly: raw.updates?.textOnly ?? undefined,

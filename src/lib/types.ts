@@ -2,6 +2,9 @@
 
 export type Phase = "onboarding" | "graduated";
 
+// How the assistant sounds on calls; guessed from its name unless the user says otherwise.
+export type AgentVoice = "masculine" | "feminine" | "neutral";
+
 export type CallOutcome =
   | "completed" // agent wrapped up the call
   | "user_hangup" // user pressed hang up mid-call
@@ -15,6 +18,7 @@ export interface OnboardingState {
   sessionId: string;
   phase: Phase;
   agentName: string | null;
+  agentVoice: AgentVoice | null;
   userName: string | null;
   helpNeed: string | null;
   gmail: { email: string } | null;
@@ -53,6 +57,7 @@ export interface TextTurnResult {
   messages: string[];
   updates: {
     agentName?: string | null;
+    agentVoice?: AgentVoice | null;
     userName?: string | null;
     helpNeed?: string | null;
     textOnly?: boolean | null;
@@ -74,6 +79,7 @@ export const initialState = (sessionId: string): OnboardingState => ({
   sessionId,
   phase: "onboarding",
   agentName: null,
+  agentVoice: null,
   userName: null,
   helpNeed: null,
   gmail: null,
