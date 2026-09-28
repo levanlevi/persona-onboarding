@@ -525,8 +525,8 @@ export function Onboarding() {
   if (!state) return <div className="min-h-dvh bg-neutral-100" />;
 
   return (
-    <div className="min-h-dvh w-full bg-[#eceae6] lg:flex lg:items-center lg:justify-center lg:gap-10 lg:p-8">
-      <div className="relative mx-auto flex h-dvh w-full max-w-[430px] flex-col overflow-hidden bg-white lg:h-[860px] lg:rounded-[48px] lg:border-[10px] lg:border-neutral-900 lg:shadow-2xl">
+    <div className="min-h-dvh w-full bg-[#eceae6] lg:flex lg:h-dvh lg:items-center lg:justify-center lg:gap-10 lg:p-6">
+      <div className="relative mx-auto flex h-dvh w-full max-w-[430px] flex-col overflow-hidden bg-white lg:h-[clamp(640px,calc(100dvh-3rem),860px)] lg:rounded-[48px] lg:border-[10px] lg:border-neutral-900 lg:shadow-2xl">
         <Thread
           state={state}
           messages={messages}
