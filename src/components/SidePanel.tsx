@@ -36,7 +36,17 @@ export function SidePanel({
 
   return (
     <aside className="hidden w-[300px] shrink-0 text-[13px] text-neutral-600 lg:block">
-      <div className="font-serif text-[28px] leading-tight text-neutral-900">Behind the scenes</div>
+      <div className="flex items-baseline justify-between">
+        <div className="font-serif text-[28px] leading-tight text-neutral-900">Behind the scenes</div>
+        <span className="space-x-2 text-[12px] text-neutral-500">
+          <a href="/flow" className="underline hover:text-neutral-900">
+            Decision tree
+          </a>
+          <a href="/how-it-works" className="underline hover:text-neutral-900">
+            How it works
+          </a>
+        </span>
+      </div>
       <p className="mt-1 text-neutral-500">
         One shared state feeds both the text agent and the voice agent, so nothing is asked twice.
       </p>
