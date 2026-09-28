@@ -274,7 +274,10 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ state }),
         });
-        if (!tokenRes.ok) throw new Error("mint failed");
+        if (!tokenRes.ok) {
+          debug("mint_failed", { status: tokenRes.status });
+          return finish("unavailable");
+        }
         const { value } = (await tokenRes.json()) as { value: string };
         if (endedRef.current) return;
 

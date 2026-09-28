@@ -1,8 +1,9 @@
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { openai, TEXT_MODEL } from "@/lib/openai";
 import { textSystemPrompt } from "@/lib/prompts";
-import { logEvent } from "@/lib/db";
+import { logLater } from "@/lib/db";
+import { clientIp, pruneRateHits, rateLimit } from "@/lib/ratelimit";
 import type { AgentVoice, ChatMessage, OnboardingState, TextEvent, TextTurnResult } from "@/lib/types";
 
 export const maxDuration = 30;
@@ -36,9 +37,9 @@ const schema = {
 
 function toModelMessages(history: ChatMessage[]): ChatCompletionMessageParam[] {
   return history.slice(-40).map((m): ChatCompletionMessageParam => {
-    if (m.kind === "text") return { role: m.role, content: m.text };
+    if (m.kind === "text") return { role: m.role, content: m.text.slice(0, 2000) };
     if (m.kind === "card") return { role: "assistant", content: `[you sent the ${m.card} card]` };
-    const lines = m.transcript.map((t) => `${t.who}: ${t.text}`).join("\n");
+    const lines = m.transcript.map((t) => `${t.who}: ${t.text.slice(0, 1000)}`).join("\n").slice(0, 8000);
     return {
       role: "system",
       content: `[phone call, outcome=${m.outcome}, ${m.durationSec}s]\n${lines || "(nothing was said)"}`,
@@ -75,6 +76,19 @@ export async function POST(req: Request) {
     history: ChatMessage[];
     event: TextEvent;
   };
+  if (!state?.sessionId || !Array.isArray(history) || !event?.type) {
+    return NextResponse.json({ error: "bad_request" }, { status: 400 });
+  }
+
+  const limited = await rateLimit([
+    { key: `chat:s:${state.sessionId}`, max: 60, windowSec: 600 },
+    { key: `chat:ip:${clientIp(req)}`, max: 150, windowSec: 600 },
+  ]);
+  if (limited) {
+    logLater(state.sessionId, "rate_limited", { route: "chat" });
+    return limited;
+  }
+  void pruneRateHits();
 
   const messages: ChatCompletionMessageParam[] = [
     { role: "system", content: textSystemPrompt(state) },
@@ -105,11 +119,11 @@ export async function POST(req: Request) {
       action: raw.action ?? "none",
     };
 
-    after(() => logEvent(state.sessionId, "text_turn", { event, result }));
+    logLater(state.sessionId, "text_turn", { event, result });
     return NextResponse.json(result);
   } catch (err) {
     console.error("[chat]", err);
-    after(() => logEvent(state.sessionId, "text_error", { event, error: String(err) }));
+    logLater(state.sessionId, "text_error", { event, error: String(err) });
     return NextResponse.json({ error: "brain_unavailable" }, { status: 502 });
   }
 }

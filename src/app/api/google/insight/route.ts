@@ -1,8 +1,9 @@
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { getGoogleSession } from "@/lib/google";
 import { openai, TEXT_MODEL } from "@/lib/openai";
 import { insightPrompt } from "@/lib/prompts";
-import { logEvent } from "@/lib/db";
+import { logLater } from "@/lib/db";
+import { clientIp, rateLimit } from "@/lib/ratelimit";
 
 export const maxDuration = 30;
 
@@ -46,12 +47,18 @@ export async function POST(req: Request) {
     helpNeed: string | null;
     userName: string | null;
   };
+  const limited = await rateLimit([
+    { key: `insight:s:${sessionId}`, max: 5, windowSec: 600 },
+    { key: `insight:ip:${clientIp(req)}`, max: 20, windowSec: 3600 },
+  ]);
+  if (limited) return limited;
+
   const s = await getGoogleSession();
   if (!s) return NextResponse.json({ error: "not_connected" }, { status: 401 });
 
   const inbox = await recentInbox(s.accessToken);
   if ("error" in inbox) {
-    after(() => logEvent(sessionId, "insight_error", { error: inbox.error }));
+    logLater(sessionId, "insight_error", { error: inbox.error });
     return NextResponse.json({ error: inbox.error }, { status: 400 });
   }
 
@@ -67,6 +74,6 @@ export async function POST(req: Request) {
   });
   const insight = completion.choices[0]?.message?.content?.trim() ?? "";
   // Only the count is logged; inbox content never goes to the database.
-  after(() => logEvent(sessionId, "insight_ready", { emailsScanned: inbox.lines.length }));
+  logLater(sessionId, "insight_ready", { emailsScanned: inbox.lines.length });
   return NextResponse.json({ insight, emailsScanned: inbox.lines.length });
 }

@@ -181,6 +181,7 @@ const OUTCOME_LABEL: Record<CallOutcome, string> = {
   dropped: "Call dropped",
   mic_denied: "Call failed: microphone blocked",
   silent: "Call ended: no audio",
+  unavailable: "Call couldn't connect",
 };
 
 function CallRecord({ m, agent }: { m: Extract<ChatMessage, { kind: "call" }>; agent: string }) {

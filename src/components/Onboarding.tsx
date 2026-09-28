@@ -156,7 +156,8 @@ export function Onboarding() {
           const ev = queueRef.current.shift()!;
           setTyping(true);
           let result: TextTurnResult | null = null;
-          for (let attempt = 0; attempt < 2 && !result; attempt++) {
+          let limited = false;
+          for (let attempt = 0; attempt < 2 && !result && !limited; attempt++) {
             try {
               const res = await fetch("/api/chat", {
                 method: "POST",
@@ -164,10 +165,13 @@ export function Onboarding() {
                 body: JSON.stringify({ state: stateRef.current, history: msgsRef.current, event: ev }),
               });
               if (res.ok) result = await res.json();
+              else if (res.status === 429) limited = true;
             } catch {}
           }
           setTyping(false);
           if (result) await applyResult(result);
+          else if (limited && ev.type === "user_message")
+            say("whoa, that's a lot at once. give me a minute to catch up and try again?");
           else if (ev.type === "user_message") say("sorry, my brain blanked for a sec. mind saying that again?");
         }
       } finally {

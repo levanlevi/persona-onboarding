@@ -1,7 +1,8 @@
-import { after, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import { REALTIME_MODEL } from "@/lib/openai";
 import { voiceInstructions } from "@/lib/prompts";
-import { logEvent } from "@/lib/db";
+import { logLater } from "@/lib/db";
+import { clientIp, rateLimit } from "@/lib/ratelimit";
 import type { AgentVoice, OnboardingState } from "@/lib/types";
 
 const VOICE_IDS: Record<AgentVoice, string> = { masculine: "cedar", feminine: "marin", neutral: "marin" };
@@ -72,6 +73,16 @@ const tools = [
 export async function POST(req: Request) {
   const { state } = (await req.json()) as { state: OnboardingState };
 
+  // Voice is the expensive part: a handful of calls per session, a few dozen per network per hour.
+  const limited = await rateLimit([
+    { key: `call:s:${state.sessionId}`, max: 8, windowSec: 600 },
+    { key: `call:ip:${clientIp(req)}`, max: 25, windowSec: 3600 },
+  ]);
+  if (limited) {
+    logLater(state.sessionId, "rate_limited", { route: "realtime" });
+    return limited;
+  }
+
   const res = await fetch("https://api.openai.com/v1/realtime/client_secrets", {
     method: "POST",
     headers: {
@@ -101,11 +112,11 @@ export async function POST(req: Request) {
   if (!res.ok) {
     const detail = await res.text();
     console.error("[realtime] mint failed", res.status, detail);
-    after(() => logEvent(state.sessionId, "realtime_mint_error", { status: res.status, detail }));
+    logLater(state.sessionId, "realtime_mint_error", { status: res.status, detail });
     return NextResponse.json({ error: "voice_unavailable" }, { status: 502 });
   }
 
   const data = (await res.json()) as { value: string };
-  after(() => logEvent(state.sessionId, "call_started", { attempt: state.callAttempts }));
+  logLater(state.sessionId, "call_started", { attempt: state.callAttempts });
   return NextResponse.json({ value: data.value });
 }

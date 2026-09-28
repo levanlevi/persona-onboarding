@@ -12,7 +12,8 @@ export type CallOutcome =
   | "missed" // nobody answered
   | "dropped" // connection failed / network
   | "mic_denied" // browser mic permission refused
-  | "silent"; // user never spoke, agent gave up
+  | "silent" // user never spoke, agent gave up
+  | "unavailable"; // voice couldn't start (rate limit / service down)
 
 export interface OnboardingState {
   sessionId: string;
