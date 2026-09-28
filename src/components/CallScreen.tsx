@@ -1,6 +1,8 @@
 "use client";
 
-import type { CallStatus } from "@/hooks/useRealtimeCall";
+import { useState } from "react";
+import type { AudioDevices, AudioIssue, CallStatus } from "@/hooks/useRealtimeCall";
+import { canPickSpeaker, shortLabel } from "@/lib/audioDevices";
 import { Avatar, fmtDuration, PhoneIcon, useTicker } from "./Thread";
 
 interface Props {
@@ -16,11 +18,21 @@ interface Props {
   onHangup: () => void;
   onToggleMute: () => void;
   onMinimize: () => void;
+  devices: AudioDevices;
+  micLevel: number;
+  audioIssue: AudioIssue;
+  onSwitchInput: (id: string) => void;
+  onSwitchOutput: (id: string) => void;
+  onRetryAudio: () => void;
 }
 
 export function CallScreen(p: Props) {
   const now = useTicker(p.mode === "live");
   const sec = p.startedAt ? Math.max(0, Math.round((now - p.startedAt) / 1000)) : 0;
+  const [showAudio, setShowAudio] = useState(false);
+  const live = p.mode === "live";
+  const input = p.devices.inputs.find((d) => d.deviceId === p.devices.inputId);
+  const output = p.devices.outputs.find((d) => d.deviceId === p.devices.outputId);
 
   const statusLine =
     p.mode === "incoming"
@@ -42,6 +54,17 @@ export function CallScreen(p: Props) {
       <div className="mt-5 text-[28px] font-light">{p.agentName}</div>
       <div className="mt-1 text-[15px] text-white/60">{statusLine}</div>
 
+      {live && p.audioIssue === "blocked" && (
+        <button onClick={p.onRetryAudio} className="mt-4 rounded-full bg-white px-4 py-2 text-[13px] font-medium text-neutral-900">
+          🔈 Tap to turn on sound
+        </button>
+      )}
+      {live && p.audioIssue === "no_audio" && !showAudio && (
+        <button onClick={() => setShowAudio(true)} className="mt-4 rounded-full bg-white/15 px-4 py-2 text-[13px]">
+          Can&apos;t hear {p.agentName}? Check your audio
+        </button>
+      )}
+
       {/* live captions */}
       <div className="mt-8 flex min-h-[120px] w-full flex-1 flex-col justify-end gap-2 overflow-hidden text-[14px] leading-snug">
         {p.mode === "live" &&
@@ -54,6 +77,44 @@ export function CallScreen(p: Props) {
           <p className="text-center text-white/40">say hi 👋</p>
         )}
       </div>
+
+      {live && (
+        <div className="mt-4 w-full">
+          <button
+            onClick={() => setShowAudio((v) => !v)}
+            className="mx-auto flex max-w-full items-center gap-2 rounded-full bg-white/10 px-3 py-1.5 text-[12px] text-white/70"
+          >
+            <LevelBars level={p.muted ? 0 : p.micLevel} />
+            <span className="truncate">
+              {input ? shortLabel(input.label) : "Microphone"}
+              {output && ` · ${shortLabel(output.label)}`}
+            </span>
+            <span className="text-white/40">{showAudio ? "▴" : "▾"}</span>
+          </button>
+          {showAudio && (
+            <div className="mt-2 space-y-2 rounded-2xl bg-black/30 p-3 text-[12px]">
+              <DeviceSelect
+                label="Microphone"
+                value={p.devices.inputId}
+                devices={p.devices.inputs}
+                onChange={p.onSwitchInput}
+              />
+              {canPickSpeaker() && p.devices.outputs.length > 0 && (
+                <DeviceSelect
+                  label="Speaker"
+                  value={p.devices.outputId}
+                  devices={p.devices.outputs}
+                  onChange={p.onSwitchOutput}
+                />
+              )}
+              <p className="text-white/40">
+                Bars should move when you talk. AirPods can switch to your phone when a call starts; pick them here
+                again if that happens.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
 
       {p.mode === "incoming" ? (
         <div className="mt-8 flex w-full justify-between px-4">
@@ -115,5 +176,49 @@ function MicIcon({ off }: { off: boolean }) {
       <path d="M5 11a7 7 0 0014 0M12 18v3" />
       {off && <path d="M4 4l16 16" strokeWidth="2.5" />}
     </svg>
+  );
+}
+
+function LevelBars({ level }: { level: number }) {
+  return (
+    <span className="flex h-3 items-end gap-[2px]" aria-hidden>
+      {[0.1, 0.25, 0.45, 0.65, 0.85].map((t, i) => (
+        <span
+          key={i}
+          className={`w-[3px] rounded-sm transition-all ${level > t ? "bg-[#30d158]" : "bg-white/25"}`}
+          style={{ height: `${4 + i * 2}px` }}
+        />
+      ))}
+    </span>
+  );
+}
+
+function DeviceSelect({
+  label,
+  value,
+  devices,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  devices: MediaDeviceInfo[];
+  onChange: (id: string) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-3">
+      <span className="shrink-0 text-white/50">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="min-w-0 flex-1 truncate rounded-lg bg-white/10 px-2 py-1.5 text-white outline-none"
+      >
+        {!devices.some((d) => d.deviceId === value) && <option value="">System default</option>}
+        {devices.map((d) => (
+          <option key={d.deviceId} value={d.deviceId} className="text-neutral-900">
+            {shortLabel(d.label)}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }

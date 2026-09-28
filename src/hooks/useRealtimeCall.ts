@@ -2,8 +2,16 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CallOutcome, OnboardingState } from "@/lib/types";
+import { applySpeaker, currentSpeakerId, listDevices, openMic } from "@/lib/audioDevices";
 
 export type CallStatus = "idle" | "connecting" | "active" | "ending";
+export type AudioIssue = null | "blocked" | "no_audio";
+export interface AudioDevices {
+  inputs: MediaDeviceInfo[];
+  outputs: MediaDeviceInfo[];
+  inputId: string;
+  outputId: string;
+}
 
 interface Options {
   onTool: (name: string, args: Record<string, unknown>) => Promise<Record<string, unknown>>;
@@ -16,6 +24,7 @@ const SILENCE_CHECK_MS = 14_000; // ask "you there?"
 const SILENCE_GIVE_UP_MS = 32_000; // hang up and fall back to text
 const WRAP_UP_MS = 4 * 60_000;
 const MAX_CALL_MS = 5 * 60_000;
+const NO_AUDIO_HINT_MS = 6000; // agent should have started talking by now
 
 type ServerEvent = {
   type: string;
@@ -28,6 +37,10 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
   const [status, setStatus] = useState<CallStatus>("idle");
   const [muted, setMuted] = useState(false);
   const [agentSpeaking, setAgentSpeaking] = useState(false);
+  const [devices, setDevices] = useState<AudioDevices>({ inputs: [], outputs: [], inputId: "", outputId: "" });
+  const [micLevel, setMicLevel] = useState(0);
+  const [audioIssue, setAudioIssue] = useState<AudioIssue>(null);
+  const meterRef = useRef<{ ctx: AudioContext; raf: number } | null>(null);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
@@ -59,7 +72,56 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
     if (dc?.readyState === "open") dc.send(JSON.stringify(event));
   }, []);
 
+  const stopMeter = useCallback(() => {
+    if (!meterRef.current) return;
+    cancelAnimationFrame(meterRef.current.raf);
+    void meterRef.current.ctx.close().catch(() => {});
+    meterRef.current = null;
+    setMicLevel(0);
+  }, []);
+
+  // Live input level, so users can see whether the agent can actually hear them.
+  const startMeter = useCallback(
+    (stream: MediaStream) => {
+      stopMeter();
+      try {
+        const ctx = new AudioContext();
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 512;
+        ctx.createMediaStreamSource(stream).connect(analyser);
+        const buf = new Uint8Array(analyser.fftSize);
+        let last = 0;
+        const tick = (t: number) => {
+          if (!meterRef.current) return;
+          meterRef.current.raf = requestAnimationFrame(tick);
+          if (t - last < 80) return;
+          last = t;
+          analyser.getByteTimeDomainData(buf);
+          let sum = 0;
+          for (const v of buf) sum += ((v - 128) / 128) ** 2;
+          setMicLevel(Math.min(1, Math.round(Math.sqrt(sum / buf.length) * 8 * 10) / 10));
+        };
+        meterRef.current = { ctx, raf: requestAnimationFrame(tick) };
+      } catch {}
+    },
+    [stopMeter],
+  );
+
+  const refreshDevices = useCallback(async () => {
+    try {
+      const { inputs, outputs } = await listDevices();
+      setDevices({
+        inputs,
+        outputs,
+        inputId: micRef.current?.getAudioTracks()[0]?.getSettings().deviceId ?? "",
+        outputId: currentSpeakerId(audioRef.current),
+      });
+    } catch {}
+  }, []);
+
   const teardown = useCallback(() => {
+    stopMeter();
+    setAudioIssue(null);
     if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = null;
     dcRef.current?.close();
@@ -72,7 +134,7 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
     agentSpeakingRef.current = false;
     setAgentSpeaking(false);
     setMuted(false);
-  }, []);
+  }, [stopMeter]);
 
   const finish = useCallback(
     (outcome: CallOutcome) => {
@@ -159,6 +221,7 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
             firstAudioRef.current = true;
             debug("rt_agent_audio_started", { paused: audioRef.current?.paused ?? null });
           }
+          setAudioIssue(audioRef.current?.paused ? "blocked" : null);
           agentSpeakingRef.current = true;
           setAgentSpeaking(true);
           break;
@@ -194,9 +257,7 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
 
       let mic: MediaStream;
       try {
-        mic = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
+        mic = await openMic();
       } catch (e) {
         debug("mic_error", { name: (e as Error)?.name });
         return finish("mic_denied");
@@ -205,6 +266,7 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
       micRef.current = mic;
       firstAudioRef.current = false;
       debug("mic_ready", { device: mic.getAudioTracks()[0]?.label ?? "unknown" });
+      startMeter(mic);
 
       try {
         const tokenRes = await fetch("/api/realtime/session", {
@@ -227,13 +289,18 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
           document.body.appendChild(el);
           audioRef.current = el;
         }
+        await applySpeaker(audioRef.current);
+        void refreshDevices();
         pc.ontrack = (e) => {
           const el = audioRef.current;
           if (!el) return;
           el.srcObject = e.streams[0];
           el.play()
             .then(() => debug("audio_playing"))
-            .catch((err) => debug("audio_play_blocked", { name: (err as Error)?.name }));
+            .catch((err) => {
+              setAudioIssue("blocked");
+              debug("audio_play_blocked", { name: (err as Error)?.name });
+            });
         };
         pc.addTrack(mic.getAudioTracks()[0], mic);
         pc.onconnectionstatechange = () => {
@@ -257,6 +324,12 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
           lastActivityRef.current = Date.now();
           setStatus("active");
           send({ type: "response.create" }); // agent speaks first
+          setTimeout(() => {
+            if (!endedRef.current && !firstAudioRef.current) {
+              setAudioIssue("no_audio");
+              debug("no_agent_audio_yet");
+            }
+          }, NO_AUDIO_HINT_MS);
           timerRef.current = setInterval(() => {
             if (endedRef.current || pendingEndRef.current) return;
             const now = Date.now();
@@ -297,8 +370,59 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
         finish("dropped");
       }
     },
-    [finish, onServerEvent, send, sendNotice],
+    [finish, onServerEvent, refreshDevices, send, sendNotice, startMeter],
   );
+
+  /** Swap the mic mid-call without renegotiating WebRTC. */
+  const switchInput = useCallback(
+    async (deviceId?: string) => {
+      try {
+        const next = await openMic(deviceId);
+        const track = next.getAudioTracks()[0];
+        const old = micRef.current;
+        track.enabled = !(old?.getAudioTracks()[0]?.enabled === false);
+        const sender = pcRef.current?.getSenders().find((x) => x.track?.kind === "audio");
+        await sender?.replaceTrack(track);
+        old?.getTracks().forEach((t) => t.stop());
+        micRef.current = next;
+        startMeter(next);
+        debug("mic_switched", { device: track.label });
+        void refreshDevices();
+      } catch (e) {
+        debug("mic_switch_failed", { error: String(e) });
+      }
+    },
+    [refreshDevices, startMeter],
+  );
+
+  const switchOutput = useCallback(
+    async (deviceId: string) => {
+      if (!audioRef.current) return;
+      await applySpeaker(audioRef.current, deviceId);
+      debug("speaker_switched", { deviceId });
+      void refreshDevices();
+    },
+    [refreshDevices],
+  );
+
+  const retryAudio = useCallback(() => {
+    audioRef.current
+      ?.play()
+      .then(() => setAudioIssue(null))
+      .catch(() => {});
+  }, []);
+
+  // Headphones plugged/unplugged or AirPods switching away mid-call.
+  useEffect(() => {
+    if (status !== "active") return;
+    const onChange = () => {
+      const track = micRef.current?.getAudioTracks()[0];
+      if (!track || track.readyState === "ended") void switchInput();
+      else void refreshDevices();
+    };
+    navigator.mediaDevices.addEventListener("devicechange", onChange);
+    return () => navigator.mediaDevices.removeEventListener("devicechange", onChange);
+  }, [status, refreshDevices, switchInput]);
 
   const hangup = useCallback(() => {
     finish(pendingEndRef.current ? "completed" : "user_hangup");
@@ -314,5 +438,19 @@ export function useRealtimeCall({ onTool, onTranscript, onEnd, onDebug }: Option
 
   useEffect(() => () => teardown(), [teardown]);
 
-  return { status, muted, agentSpeaking, start, hangup, toggleMute, sendNotice };
+  return {
+    status,
+    muted,
+    agentSpeaking,
+    devices,
+    micLevel,
+    audioIssue,
+    start,
+    hangup,
+    toggleMute,
+    sendNotice,
+    switchInput,
+    switchOutput,
+    retryAudio,
+  };
 }

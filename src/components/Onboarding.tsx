@@ -555,6 +555,12 @@ export function Onboarding() {
             onHangup={call.hangup}
             onToggleMute={call.toggleMute}
             onMinimize={() => setMinimized(true)}
+            devices={call.devices}
+            micLevel={call.micLevel}
+            audioIssue={call.audioIssue}
+            onSwitchInput={call.switchInput}
+            onSwitchOutput={call.switchOutput}
+            onRetryAudio={call.retryAudio}
           />
         )}
       </div>
